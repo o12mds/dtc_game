@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Māui & the Giant Fish — Platformer</title>
+  <style>
+    html,body{
+      margin:0;
+      height:100%;
+      background:#bfe9ff;
+      font-family:sans-serif;
+      overflow:hidden;
+    }
+    #gameCanvas{
+      display:block;
+      margin:0 auto;
+      border:4px solid #073b3b;
+      border-radius:12px;
+      box-shadow:0 8px 20px rgba(0,0,0,.25);
+    }
+    .overlay{
+      position:absolute;
+      inset:0;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      text-align:center;
+      background:rgba(255,255,255,.9);
+      z-index:10;
+      gap:8px;
+      transform:translateY(-180px); /* ★ 버튼/텍스트 전체 높이 조정 */
+    }
+    .overlay h1,
+    .overlay h2,
+    .overlay p{
+      margin:4px 0;
+    }
+    .hidden{display:none !important;}
+    button{
+      font-size:1.5rem;
+      margin:6px 0;
+      padding:14px 28px;
+      border:none;
+      border-radius:12px;
+      cursor:pointer;
+      color:#fff;
+      font-weight:bold;
+      background:linear-gradient(#6fb7ff,#2b6eea);
+      box-shadow:0 5px 0 #1a4fa0;
+    }
+    button:active{
+      transform:translateY(3px);
+      box-shadow:0 2px 0 #1a4fa0;
+    }
+    #hud{
+      position:absolute;
+      top:8px;
+      left:8px;
+      z-index:5;
+      background:rgba(255,255,255,.8);
+      padding:6px 10px;
+      border-radius:10px;
+      border:2px solid #073b3b;
+      font-weight:700;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas" width="960" height="540"></canvas>
+
+  <!-- 상단 조개/라이프 표시 -->
+  <div id="hud" class="hidden">
+    🐚 <span id="shells">0</span>/3 · ❤️ <span id="lives">3</span>
+  </div>
+
+  <!-- 메인 메뉴 -->
+  <div id="menu" class="overlay">
+    <h1>The Legend of Māui</h1>
+    <button id="startBtn">START</button>
+    <button id="tutorialBtn">TUTORIAL</button>
+  </div>
+
+  <!-- 튜토리얼 -->
+  <div id="tutorial" class="overlay hidden">
+    <h2>Tutorial</h2>
+    <p>
+      ← → 이동, Space/↑ 점프 (최근 방향으로 자동 점프)<br>
+      바다 아이템 3개를 모두 모은 뒤 보물상자에 닿으면<br>
+      상자가 열리고 잠시 후 You hooked the giant fish! 화면이 나옵니다.
+    </p>
+    <button id="backBtn">BACK</button>
+    <button id="playBtn">PLAY</button>
+  </div>
+
+  <!-- 승리 화면 -->
+  <div id="win" class="overlay hidden">
+    <h2>You hooked the giant fish!</h2>
+    <p>Great job, Māui!</p>
+    <button id="againBtn">PLAY AGAIN</button>
+  </div>
+
+  <!-- 게임오버 화면 -->
+  <div id="gameover" class="overlay hidden">
+    <h2>Game Over</h2>
+    <p>Try again, Māui!</p>
+    <button id="goAgainBtn">TRY AGAIN</button>
+    <button id="goMenuBtn">MENU</button>
+  </div>
+
+  <script>
+    // ===== 캔버스 / 기본 설정 =====
+    const canvas = document.getElementById("gameCanvas");
+    const ctx    = canvas.getContext("2d");
+    const W = canvas.width;
+    const H = canvas.height;
+
+    const groundY = H - 120; // ★ 땅 높이 (배경 모래와 맞게)
+
+    const hud        = document.getElementById("hud");
+    const shellsSpan = document.getElementById("shells");
+    const livesSpan  = document.getElementById("lives");
+    const menu       = document.getElementById("menu");
+    const tutorialEl = document.getElementById("tutorial");
+    const winEl      = document.getElementById("win");
+    const gameoverEl = document.getElementById("gameover");
+
+    function show(el){ el.classList.remove("hidden"); }
+    function hide(el){ el.classList.add("hidden"); }
+
+    // ===== 입력 처리 =====
+    const keys = { ArrowLeft:false, ArrowRight:false, ArrowUp:false };
+    let lastDir = 1;
+
+    window.addEventListener("keydown", e => {
+      if (["ArrowLeft","ArrowRight","ArrowUp","Space"].includes(e.code)) e.preventDefault();
+      if (e.code === "ArrowLeft")  keys.ArrowLeft  = true;
+      if (e.code === "ArrowRight") keys.ArrowRight = true;
+      if (e.code === "ArrowUp" || e.code === "Space") keys.ArrowUp = true;
+    });
+
+    window.addEventListener("keyup", e => {
+      if (e.code === "ArrowLeft")  keys.ArrowLeft  = false;
+      if (e.code === "ArrowRight") keys.ArrowRight = false;
+      if (e.code === "ArrowUp" || e.code === "Space") keys.ArrowUp = false;
+    });
+
+    window.addEventListener("blur", () => {
+      keys.ArrowLeft = keys.ArrowRight = keys.ArrowUp = false;
+    });
+
+    // ===== 스프라이트 & 배경 이미지 =====
+    const sprite = {
+      mauiIdle   : new Image(),
+      mauiJump   : new Image(),
+      crab       : new Image(),
+      eel        : new Image(),
+      chest      : new Image(),
+      chestOpen  : new Image()
+    };
+    sprite.mauiIdle.src  = "images/maui_idle.png";
+    sprite.mauiJump.src  = "images/maui_jump.png";
+    sprite.crab.src      = "images/crab.png";
+    sprite.eel.src       = "images/eel.png";
+    sprite.chest.src     = "images/chest.png";
+    sprite.chestOpen.src = "images/chest_open.png";
+
+    const shellImages = [new Image(), new Image(), new Image()];
+    shellImages[0].src = "images/shell1.png";
+    shellImages[1].src = "images/shell2.png";
+    shellImages[2].src = "images/shell3.png";
+
+    const background = new Image();
+    background.src = "images/background.png";
+
+    // 비율 유지하면서 박스 안에 맞춰 그리는 함수
+    function drawSprite(img, boxX, boxY, boxW, boxH, colorIfMissing){
+      if (img && img.complete && img.naturalWidth > 0){
+        const iw = img.naturalWidth;
+        const ih = img.naturalHeight;
+        const scale = Math.min(boxW / iw, boxH / ih);
+        const drawW = iw * scale;
+        const drawH = ih * scale;
+        const dx = boxX + (boxW - drawW) / 2;
+        const dy = boxY + (boxH - drawH) / 2;
+        ctx.drawImage(img, dx, dy, drawW, drawH);
+      } else {
+        ctx.fillStyle = colorIfMissing;
+        ctx.fillRect(boxX, boxY, boxW, boxH);
+      }
+    }
+
+    // ===== 게임 오브젝트 =====
+    // ★ 마우이 크기 조절: w, h 변경 / 시작 위치: x, y
+    const player = {
+      x:80,
+      y:groundY-110,
+      w:80,
+      h:110,
+      vx:0,
+      vy:0,
+      onGround:false,
+      lives:3,
+      shells:0
+    };
+
+    let shells, enemies, chest;
+    let winTriggered = false;
+
+    function resetLevel(){
+      // 플레이어 초기화
+      player.x = 80;
+      player.y = groundY - player.h;
+      player.vx = 0;
+      player.vy = 0;
+      player.onGround = false;
+      player.lives = 3;
+      player.shells = 0;
+      lastDir = 1;
+      winTriggered = false;
+
+      // ★ 조개 위치/크기 수정: x, y, w, h
+      shells = [
+        {x:220, y:groundY-50, w:70, h:70, imgIndex:0, got:false},
+        {x:500, y:groundY-50, w:70, h:70, imgIndex:1, got:false},
+        {x:770, y:groundY-50, w:70, h:70, imgIndex:2, got:false}
+      ];
+
+      // ★ 적 위치/크기 수정: enemies 배열의 x, y, w, h
+      enemies = [
+        {x:360, y:groundY-55, w:110, h:80, type:"crab"},
+        {x:640, y:groundY-60, w:110, h:80, type:"eel"}
+      ];
+
+      // ★ 보물상자 위치/크기 수정: chest.x, chest.y, chest.w, chest.h
+      chest = {x:870, y:groundY-70, w:100, h:100, open:false};
+
+      updateHud();
+    }
+
+    function updateHud(){
+      shellsSpan.textContent = player.shells;
+      livesSpan.textContent  = player.lives;
+    }
+
+    function rectOverlap(a,b){
+      return (
+        a.x < b.x + b.w &&
+        a.x + a.w > b.x &&
+        a.y < b.y + b.h &&
+        a.y + a.h > b.y
+      );
+    }
+
+    function chestOverlap(p,c){
+      const box = {
+        x: c.x - 10,
+        y: c.y - 10,
+        w: c.w + 20,
+        h: c.h + 20
+      };
+      return rectOverlap(p, box);
+    }
+
+    const gravity   = 0.8;
+    const moveSpeed = 4.2;
+    const jumpPower = -22;
+
+    let running = false;
+
+    function startGame(){
+      hide(menu);
+      hide(tutorialEl);
+      hide(winEl);
+      hide(gameoverEl);
+      show(hud);
+
+      resetLevel();
+      running = true;
+      requestAnimationFrame(loop);
+    }
+
+    function gameOver(){
+      running = false;
+      hide(hud);
+      show(gameoverEl); // ★ 게임오버 화면으로 전환
+    }
+
+    function winGame(){
+      running = false;
+      hide(hud);
+      show(winEl);
+    }
+
+    function loop(){
+      if (!running) return;
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    function update(){
+      // 상자 열린 뒤에는 더 이상 업데이트 안 함 (마우이 멈춤)
+      if (winTriggered) return;
+
+      let dir = 0;
+      if (keys.ArrowLeft)  dir = -1;
+      if (keys.ArrowRight) dir =  1;
+      if (dir !== 0) lastDir = dir;
+
+      if (player.onGround){
+        player.vx = dir !== 0 ? moveSpeed * dir : 0;
+      } else {
+        if (dir !== 0) player.vx = moveSpeed * dir;
+      }
+
+      if (keys.ArrowUp && player.onGround){
+        player.vy = jumpPower;
+        player.onGround = false;
+        player.vx = moveSpeed * lastDir;
+      }
+
+      player.vy += gravity;
+      player.x  += player.vx;
+      player.y  += player.vy;
+
+      if (player.x < 0) player.x = 0;
+      if (player.x + player.w > W) player.x = W - player.w;
+
+      if (player.y + player.h >= groundY){
+        player.y = groundY - player.h;
+        player.vy = 0;
+        player.onGround = true;
+      }
+
+      for (const s of shells){
+        if (s.got) continue;
+        if (rectOverlap(player,s)){
+          s.got = true;
+          player.shells++;
+          updateHud();
+        }
+      }
+
+      for (const e of enemies){
+        if (!rectOverlap(player,e)) continue;
+
+        const playerBottom = player.y + player.h;
+        const enemyTop     = e.y;
+        if (playerBottom < enemyTop + 12) continue;
+
+        player.lives--;
+        updateHud();
+
+        player.x -= lastDir * 40;
+        if (player.x < 0) player.x = 0;
+        if (player.x + player.w > W) player.x = W - player.w;
+        player.vy = jumpPower * 0.6;
+        player.onGround = false;
+
+        if (player.lives <= 0){
+          gameOver();
+          return;
+        }
+      }
+
+      // ★ 상자 열린 뒤 엔딩까지 기다리는 시간: 아래 5000을 수정하면 됨
+      if (!winTriggered &&
+          player.shells >= shells.length &&
+          chestOverlap(player, chest)) {
+        chest.open = true;
+        winTriggered = true;
+        setTimeout(() => {
+          winGame();
+        }, 5000); // 5000ms = 5초
+      }
+    }
+
+    function draw(){
+      if (background.complete && background.naturalWidth > 0){
+        ctx.drawImage(background, 0, 0, W, H);
+      } else {
+        const mid = H*0.6;
+        const grad = ctx.createLinearGradient(0,0,0,mid);
+        grad.addColorStop(0,"#bfe9ff");
+        grad.addColorStop(1,"#6ec6ff");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0,0,W,mid);
+        ctx.fillStyle = "#6ec6ff";
+        ctx.fillRect(0,mid,W,H-mid);
+      }
+
+      for (const s of shells){
+        if (s.got) continue;
+        const img = shellImages[s.imgIndex] || shellImages[0];
+        drawSprite(img, s.x, s.y, s.w, s.h, "gold");
+      }
+
+      for (const e of enemies){
+        const img   = e.type === "crab" ? sprite.crab : sprite.eel;
+        const color = e.type === "crab" ? "red"       : "green";
+        drawSprite(img, e.x, e.y, e.w, e.h, color);
+      }
+
+      // 보물상자 (열리면 크게)
+      const baseX = chest.x;
+      const baseY = chest.y;
+      const baseW = chest.w;
+      const baseH = chest.h;
+
+      let drawX = baseX;
+      let drawY = baseY;
+      let drawW = baseW;
+      let drawH = baseH;
+
+      if (chest.open){
+        drawW = 120;
+        drawH = 120;
+        drawX = baseX - (drawW - baseW) / 2;
+        drawY = baseY - (drawH - baseH);
+      }
+
+      const chestImg = chest.open ? sprite.chestOpen : sprite.chest;
+      drawSprite(chestImg, drawX, drawY, drawW, drawH, "saddlebrown");
+
+      // 상자 열린 뒤에는 마우이 안 보이게
+      if (!winTriggered){
+        const movingOrAir = Math.abs(player.vx) > 0.1 || !player.onGround;
+        const playerImg = movingOrAir ? sprite.mauiJump : sprite.mauiIdle;
+        drawSprite(playerImg, player.x, player.y, player.w, player.h, "brown");
+      }
+    }
+
+    // ===== 버튼 연결 =====
+    document.getElementById("startBtn").onclick    = startGame;
+    document.getElementById("tutorialBtn").onclick = () => { hide(menu); show(tutorialEl); };
+    document.getElementById("backBtn").onclick     = () => { hide(tutorialEl); show(menu); };
+    document.getElementById("playBtn").onclick     = startGame;
+    document.getElementById("againBtn").onclick    = startGame;
+
+    document.getElementById("goAgainBtn").onclick  = startGame;
+    document.getElementById("goMenuBtn").onclick   = () => {
+      hide(gameoverEl);
+      show(menu);
+    };
+
+    // 초기 상태
+    show(menu);
+    hide(tutorialEl);
+    hide(winEl);
+    hide(gameoverEl);
+    hide(hud);
+  </script>
+</body>
+</html>
